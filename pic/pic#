@@ -1,1 +1,189 @@
+/*
+void main(void)
+{
+    // initialize the device
+    SYSTEM_Initialize();
+    SYSTEM_Initialize();
+    EUSART1_Initialize();
+    SPI2_Initialize();
+    uint8_t Motor=0;
+    uint8_t Forward  =  0b11111111;
+    uint8_t Backward =  0b11111101;
+    DIS_SetLow();
+    while (1) {
+        SPI2_Open(SPI2_DEFAULT);
+        MOTORCS_SetLow();
+        Motor=SPI2_ExchangeByte(Forward);
+        LED_Toggle();
+        MOTORCS_SetHigh();
+        SPI2_Close();
+        __delay_ms(1000);        
+        SPI2_Open(SPI2_DEFAULT);
+        MOTORCS_SetLow();
+        Motor=SPI2_ExchangeByte(Backward);
+        LED_Toggle();
+        MOTORCS_SetHigh();
+        SPI2_Close();
+        __delay_ms(1000);
+    }
+}
+*/
+
+
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include "mcc_generated_files/mcc.h"
+#include "mcc_generated_files/spi2.h"
+#include "mcc_generated_files/examples/i2c1_master_example.h"
+
+#define address 0b1001100 //hex 0x4C //hex through hole 0x48
+#define tempreg 0x00
+
+void INIT_FULL_SYSTEM(void)
+{
+    //system init
+    SYSTEM_Initialize();
+
+    //resource init
+    I2C1_Initialize();
+    EUSART1_Initialize();
+    SPI2_Initialize();
+    PWM6_Initialize();
+
+    //interrupt init
+    INTERRUPT_GlobalInterruptEnable();
+    INTERRUPT_PeripheralInterruptEnable();
+}
+
+void Update_LED_State(int *sensor_Values)
+{
+    //check if temp value in F is above danger threshold (85)
+    if (sensor_Values[2] >= 70) {
+        LED_1_SetHigh();
+        LED_2_SetHigh();
+        LED_3_SetHigh();
+        __delay_ms(100);
+        LED_1_SetLow();
+        LED_2_SetLow();
+        LED_3_SetLow();
+        __delay_ms(100);
+
+    } else {
+        //Force sensor LED control
+        if (sensor_Values[3] >= 66) {
+            LED_1_SetHigh();
+        }
+        if (sensor_Values[3] >= 33) {
+            LED_2_SetHigh();
+        }
+        if (sensor_Values[3] >= 0) {
+            LED_3_SetHigh();
+        }
+    }
+}
+
+void Update_Motor(int *sensor_Values)
+{
+    if (sensor_Values[2] >= 70) {
+        DIR_SetHigh();
+        PWM6_LoadDutyValue(255);
+    } else {
+        DIR_SetLow();
+        PWM6_LoadDutyValue(20);
+    }
+}
+
+uint8_t* read_Sensor_Values(void)
+{
+    static uint8_t sensor_Values[5];
+
+    //reading temp sensor data
+    sensor_Values[1] = I2C1_Read1ByteRegister(address, tempreg);
+
+    //TempF is index 2
+    //sensor_Values[2] = (sensor_Values[1] * 1.8) + 32;
+
+    //reading force sensor data
+    sensor_Values[3] = 0; //read channel1
+    sensor_Values[3] = (sensor_Values[3] + 0) / 2; //read channel2
+
+    // add null terminator to the end of the array
+    sensor_Values[4] = '\0';
+
+    return sensor_Values;
+}
+
+void ESP32_Send_Sensor_Data(int *sensor_Values)
+{
+    if (EUSART1_is_tx_ready()) {
+        printf("TempC= %d;TempF= %d;Force= %d;", sensor_Values[1], sensor_Values[2], sensor_Values[3]);
+        __delay_ms(1000);
+    }
+}
+
+void ESP32_Receive_Motor_Command(char *a)
+{
+    if (EUSART1_is_rx_ready()){
+        char command[15];
+       
+        // read command from UART buffer
+        EUSART1_Read();
+       
+        int com_dir = 0;
+        int com_time = 0;
+        int result =0;
+   
+        result = sscanf(command,"_%d %d;", &com_dir,&com_time);
+       
+        if (com_dir==1){
+            DIR_SetHigh();
+            PWM6_LoadDutyValue(255);
+            __delay_ms(com_time);
+            PWM6_LoadDutyValue(0);
+           
+        }else{
+            DIR_SetLow();
+            PWM6_LoadDutyValue(255);
+            __delay_ms(com_time);
+            PWM6_LoadDutyValue(0);
+        }
+    }
+}
+
+
+
+void main(void)
+{
+    //Init system,resources,and interrupts
+    INIT_FULL_SYSTEM();
+   
+    //all variables used in main loop
+    int sensor_Values[4];
+   
+    //char a[30];
+   
+    //when firing, takes a command in the form "DIR_VALUE MOTOR_RUN_TIME\r" from mqtt
+    //EUSART1_SetRxInterruptHandler(ESP32_Receive_Motor_Command(a));
+   
+   
+    while (1)
+       
+    {
+        //char a[100];
+        //read all 4 sensor values into an array of 4 length
+        //sensor_Values = read_Sensor_Values();
+       
+        //Updates LEDs based on sensor values
+        Update_LED_State(sensor_Values);
+       
+        //updates motor with sensor values
+        //Update_Motor(sensor_Values);
+       
+        //sends sensor data to mqtt server
+        ESP32_Send_Sensor_Data(sensor_Values);
+       
+       
+    }
+}
 
